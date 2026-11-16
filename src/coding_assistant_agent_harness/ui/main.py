@@ -1,3 +1,4 @@
+import time
 from asyncio import CancelledError
 from pathlib import Path
 
@@ -9,9 +10,16 @@ from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from ..agent import Agent
 from ..config import MODEL_NAME
-from ..events import AgentError, TextDelta, ThinkingDelta, TurnDone
+from ..events import (
+    AgentError,
+    TextDelta,
+    ThinkingDelta,
+    ToolCallFinished,
+    ToolCallStarted,
+    TurnDone,
+)
 from .screens import PreloadScreen
-from .widgets import StatusBar
+from .widgets import StatusBar, ToolCallView
 
 
 class AgentApp(App):
@@ -68,20 +76,50 @@ class AgentApp(App):
         log = self.query_one("#log", VerticalScroll)
         status_bar = self.query_one(StatusBar)
         text = ""
+        last_render = 0.0
+        tool_views: dict[int, ToolCallView] = {} # call_id = its widget
         try:
             async for event in self.agent.run(prompt):
                 match event:
                     case TextDelta(text=piece):
                         status_bar.status = "generating"
                         text += piece
-                        await reply.update(text)
-                        log.scroll_end(animate=False)
+                        now = time.monotonic()
+                        if now - last_render >= 0.1:
+                            last_render - now
+                            await reply.update(text)
+                            log.scroll_end(animate=False)
                     case ThinkingDelta():
+                        status_bar.status = "thinking"
+                    case ToolCallStarted(call_id=call_id, name=name, arguments=arguments):
+                        status_bar.status = "tool"
+                        if text:
+                            await reply.update(text)
+                        else:
+                            await reply.remove()
+                        view = ToolCallView(name, arguments)
+                        tool_views[call_id] = view
+                        await log.mount(view)
+                        reply = Markdown(classes="assistant")
+                        await log.mount(reply)
+                        text = ""
+                        log.scroll_end(animate=False)
+                    case ToolCallFinished(call_id=call_id, result=result):
+                        tool_views[call_id].set_result(result)
                         status_bar.status = "thinking"
                     case AgentError(message=message):
                         await reply.update(f"**Error:** {message}")
-                    case TurnDone():
-                        pass
+                    case TurnDone(stats=stats):
+                        await reply.update(text)
+                        log.scroll_end(animate=False)
+                        if stats:
+                            self.notify(
+                                f"load {stats.load_seconds:.1f}s · "
+                                f"prompt {stats.prompt_tokens} tok in {stats.prompt_seconds:.1f}s"
+                                f"({stats.prompt_rate:.0f} tok/s) · "
+                                f"output {stats.output_rate:.1f} tok/s",
+                                timeout=8,
+                            )
         except CancelledError:
             await reply.update(text + "\n\n*[stopped]*")
             raise
