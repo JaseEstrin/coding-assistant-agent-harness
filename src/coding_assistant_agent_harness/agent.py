@@ -11,10 +11,9 @@ from .config import (
     SERVER_ADDRESS,
     THINKING,
 )
+from .events import AgentError, Event, TextDelta, ThinkingDelta, TurnDone
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
-
-EXIT_COMMANDS = {"/bye", "/exit", "/quit"}
 
 
 def load_system_prompt(project_dir: Path) -> str:
@@ -26,15 +25,33 @@ def load_system_prompt(project_dir: Path) -> str:
 class Agent:
     """Holds the conversation and talks to the model. Doesn't know anything about the ui"""
 
-    def __init__(self, project_dir: Path) -> None:
-        self.client = AsyncClient(host=SERVER_ADDRESS)
-        # The model's entire memory is this list. Resent with every request
-        self.messages = [{"role": "system", "content": load_system_prompt(project_dir)}]
+    def __init__(self, project_dir: Path, client: AsyncClient | None = None) -> None:
+        self.project_dir = project_dir
+        self.client = client or AsyncClient(host=SERVER_ADDRESS) # optional
+        self.system_prompt = load_system_prompt(project_dir)
+        self.messages: list[dict] = []
+        self.reset()
 
-    async def send(self, user_text: str) -> AsyncIterator[str]:
-        """Add a user message, yield reply as it streams, then save it"""
+    def reset(self) -> None:
+        """Starts a fresh conversation, keeps system prompt"""
+        self.messages = [{"role": "system", "content": self.system_prompt}]
+
+    async def preload(self) -> str | None:
+        """Load model into memory without generating anything.
+        Raises connection error if ollama isn't running"""
+        try:
+            await self.client.chat(model=MODEL_NAME, messages=[])
+        except ConnectionError:
+            return "Couldn't reach ollama. systemctl status ollama"
+        except ResponseError as error:
+            return f"ollama returned an error: {error.error}"
+        return None
+
+    async def run(self, user_text: str) -> AsyncIterator[Event]:
+        """Handle one user message, yielding events as the reply streams in."""
         self.messages.append({"role": "user", "content": user_text})
         reply = ""
+ 
         try:
             stream = await self.client.chat(
                 model=MODEL_NAME,
@@ -44,46 +61,29 @@ class Agent:
                 options={"num_ctx": CONTEXT_LENGTH},
             )
             async for chunk in stream:
-                piece = chunk.message.content
-                if piece:
-                    reply += piece
-                    yield piece
-        except BaseException:
-            # Failed or cancelled -- drop unanswered message
-            self.messages.pop()
+                if chunk.message.thinking:
+                    yield ThinkingDelta(chunk.message.thinking)
+                if chunk.message.content:
+                    reply += chunk.message.content
+                    yield TextDelta(chunk.message.content)
+ 
+        except asyncio.CancelledError:
+            # The user stopped generation. Keep whatever arrived so the history stays consistent then let the cancellation continue.
+            if reply:
+                self.messages.append({"role": "assistant", "content": reply})
+            else:
+                self.messages.pop()
             raise
-        self.messages.append({"role": "assistant", "content": reply})
-
-    
-async def main() -> None:
-    agent = Agent(Path.cwd())
-
-    print(f"Talking to {MODEL_NAME}. /bye, /exit, or /quit to quit.\n")
-
-    while True:
-        try:
-            # input() blocks, run it in a thread to keep event loop free
-            user_text = await asyncio.to_thread(input, "you> ")
-        except (EOFError, KeyboardInterrupt): #ctrl+d or ctrl+c
-            print()
-            break
-
-        user_text = user_text.strip()
-        if not user_text:
-            continue
-        if user_text.lower() in EXIT_COMMANDS:
-            break
-
-        print("agent> ", end="", flush=True)
-        try:
-            async for piece in agent.send(user_text):
-                print(piece, end="", flush=True)
-            print()
+ 
         except ConnectionError:
-            print("\nCouldn't connect to ollama -- systemctl status ollama")
+            self.messages.pop()  # drop the unanswered message
+            yield AgentError("Couldn't reach ollama. systemctl status ollama")
+            return
+ 
         except ResponseError as error:
-            print(f"\nollama error: {error}")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            self.messages.pop()
+            yield AgentError(f"ollama returned an error: {error.error}")
+            return
+ 
+        self.messages.append({"role": "assistant", "content": reply})
+        yield TurnDone(reply)

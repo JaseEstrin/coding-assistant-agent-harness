@@ -1,13 +1,14 @@
-import asyncio
 from pathlib import Path
 
-from ollama import ResponseError
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from ..agent import Agent
+from ..config import MODEL_NAME
+from ..events import AgentError, TextDelta, ThinkingDelta, TurnDone
+from .screens import PreloadScreen
 
 
 class AgentApp(App):
@@ -20,6 +21,18 @@ class AgentApp(App):
 
     def on_mount(self) -> None:
         self.agent = Agent(Path.cwd())
+        self.preload_screen = PreloadScreen(MODEL_NAME)
+        self.push_screen(self.preload_screen)
+        self.preload_agent()
+
+    @work(exclusive=True, group="preload")
+    async def preload_agent(self) -> None:
+        error = await self.agent.preload()
+        if error:
+            self.preload_screen.show_error(error)
+            return
+        self.pop_screen()
+        self.query_one(Input).focus()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -37,28 +50,35 @@ class AgentApp(App):
         await log.mount(Static(prompt, classes="user"))
         reply = Markdown(classes="assistant")
         await log.mount(reply)
+        log.scroll_end(animate=False)
         event.input.disabled = True
         self.run_agent(prompt, reply)
 
     @work(exclusive=True)
     async def run_agent(self, prompt: str, reply: Markdown) -> None:
-        self.query_one("#log", VerticalScroll).anchor()
-        stream = Markdown.get_stream(reply)
+        log = self.query_one("#log", VerticalScroll)
+        text = ""
         try:
-            async for piece in self.agent.send(prompt):
-                await stream.write(piece)
-        except ConnectionError:
-            await stream.write("\n\n**Couldn't connect to ollama** ('systemctl status ollama')")
-        except ResponseError as error:
-            await stream.write(f"\n\n**ollama error:** {error}")
+            async for event in self.agent.run(prompt):
+                match event:
+                    case TextDelta(text=piece):
+                        text += piece
+                        await reply.update(text)
+                        log.scroll_end(animate=False)
+                    case ThinkingDelta():
+                        pass
+                    case AgentError(message=message):
+                        await reply.update(f"**Error:** {message}")
+                    case TurnDone():
+                        pass
         finally:
-            await stream.stop()
-            input_box = self.query_one(Input)
-            input_box.disabled = False
-            input_box.focus()
+            user_input = self.query_one(Input)
+            user_input.disabled = False
+            user_input.focus()
 
     def action_clear(self) -> None:
         self.query_one("#log").remove_children()
+        self.agent.reset()  # forget the conversation, not just the screen
 
 
 if __name__ == "__main__":
