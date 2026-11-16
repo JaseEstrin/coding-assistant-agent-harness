@@ -1,7 +1,9 @@
+from asyncio import CancelledError
 from pathlib import Path
 
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
@@ -9,6 +11,7 @@ from ..agent import Agent
 from ..config import MODEL_NAME
 from ..events import AgentError, TextDelta, ThinkingDelta, TurnDone
 from .screens import PreloadScreen
+from .widgets import StatusBar
 
 
 class AgentApp(App):
@@ -17,10 +20,14 @@ class AgentApp(App):
     .user { background: $boost; padding: 0 1; margin-top: 1; }
     .assistant { margin-top: 1; }
     """
-    BINDINGS = [("ctrl+l", "clear", "Clear chat")]
+    BINDINGS = [  # noqa: RUF012
+        ("ctrl+l", "clear", "Clear chat"),
+        Binding("escape", "stop", "Stop"),
+    ]
 
     def on_mount(self) -> None:
         self.agent = Agent(Path.cwd())
+        self.agent_worker = None
         self.preload_screen = PreloadScreen(MODEL_NAME)
         self.push_screen(self.preload_screen)
         self.preload_agent()
@@ -37,6 +44,7 @@ class AgentApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
         yield VerticalScroll(id="log")
+        yield StatusBar(MODEL_NAME)
         yield Input(placeholder="Ask the agent...")
         yield Footer()
 
@@ -52,29 +60,40 @@ class AgentApp(App):
         await log.mount(reply)
         log.scroll_end(animate=False)
         event.input.disabled = True
-        self.run_agent(prompt, reply)
+        self.query_one(StatusBar).status = "thinking"
+        self.agent_worker = self.run_agent(prompt, reply)
 
     @work(exclusive=True)
     async def run_agent(self, prompt: str, reply: Markdown) -> None:
         log = self.query_one("#log", VerticalScroll)
+        status_bar = self.query_one(StatusBar)
         text = ""
         try:
             async for event in self.agent.run(prompt):
                 match event:
                     case TextDelta(text=piece):
+                        status_bar.status = "generating"
                         text += piece
                         await reply.update(text)
                         log.scroll_end(animate=False)
                     case ThinkingDelta():
-                        pass
+                        status_bar.status = "thinking"
                     case AgentError(message=message):
                         await reply.update(f"**Error:** {message}")
                     case TurnDone():
                         pass
+        except CancelledError:
+            await reply.update(text + "\n\n*[stopped]*")
+            raise
         finally:
+            status_bar.status = "idle"
             user_input = self.query_one(Input)
             user_input.disabled = False
             user_input.focus()
+
+    def action_stop(self) -> None:
+        if self.agent_worker is not None and self.agent_worker.is_running:
+            self.agent_worker.cancel()
 
     def action_clear(self) -> None:
         self.query_one("#log").remove_children()
