@@ -1,14 +1,13 @@
 import asyncio
+from pathlib import Path
+
+from ollama import ResponseError
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import VerticalScroll, Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
-
-async def fake_stream(prompt: str):
-    for word in f"You said **{prompt}**. Here is a streamed reply.".split():
-        await asyncio.sleep(0.08)
-        yield word + " "
+from ..agent import Agent
 
 
 class AgentApp(App):
@@ -18,6 +17,9 @@ class AgentApp(App):
     .assistant { margin-top: 1; }
     """
     BINDINGS = [("ctrl+l", "clear", "Clear chat")]
+
+    def on_mount(self) -> None:
+        self.agent = Agent(Path.cwd())
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -35,15 +37,25 @@ class AgentApp(App):
         await log.mount(Static(prompt, classes="user"))
         reply = Markdown(classes="assistant")
         await log.mount(reply)
+        event.input.disabled = True
         self.run_agent(prompt, reply)
 
     @work(exclusive=True)
     async def run_agent(self, prompt: str, reply: Markdown) -> None:
-        text = ""
-        async for chunk in fake_stream(prompt):
-            text += chunk
-            await reply.update(text)
-            self.query_one("#log").scroll_end(animate=False)
+        self.query_one("#log", VerticalScroll).anchor()
+        stream = Markdown.get_stream(reply)
+        try:
+            async for piece in self.agent.send(prompt):
+                await stream.write(piece)
+        except ConnectionError:
+            await stream.write("\n\n**Couldn't connect to ollama** ('systemctl status ollama')")
+        except ResponseError as error:
+            await stream.write(f"\n\n**ollama error:** {error}")
+        finally:
+            await stream.stop()
+            input_box = self.query_one(Input)
+            input_box.disabled = False
+            input_box.focus()
 
     def action_clear(self) -> None:
         self.query_one("#log").remove_children()

@@ -18,3 +18,8 @@ What are important limitations of the agent?
 - The agent MUST NOT be able to read or edit files outside of the project directory it is allowed to look at
 - The agent MUST NOT be able to edit a file without the exact changes it is planning to make being confirmed by the user
 - The agent MUST NOT use non-existent tools, or mismatched tools (ex: cargo check in a Python file)
+
+
+Functionality
+- Model should be preloaded when Textual window is opened, and should be loaded before the user can pass a prompt
+- Model should be straightforward. No optimisim, no emojis, no bias
