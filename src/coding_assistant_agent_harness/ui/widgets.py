@@ -29,7 +29,15 @@ class StatusBar(Static):
     def watch_status(self, old: str, new: str) -> None:
         self.remove_class(f"-{old}")
         self.add_class(f"-{new}")
-        self.update(f"{self.model_name}  {self.LABELS[new]}")
+        self._redraw()
+
+    def set_model(self, model_name: str) -> None:
+        """Show a different model name after switching models"""
+        self.model_name = model_name
+        self._redraw()
+
+    def _redraw(self) -> None:
+        self.update(f"{self.model_name}  {self.LABELS[self.status]}")
 
 
 class ToolCallView(Collapsible):

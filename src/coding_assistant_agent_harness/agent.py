@@ -49,6 +49,7 @@ class Agent:
         self.client = client or AsyncClient(host=SERVER_ADDRESS) # optional
         self.system_prompt = load_system_prompt(project_dir)
         self.tools = tool_schemas()
+        self.model = MODEL_NAME
         self.messages: list[dict] = []
         self._call_ids = count(1) # each tool call given a unique id for ui 
         self.reset()
@@ -57,11 +58,20 @@ class Agent:
         """Starts a fresh conversation, keeps system prompt"""
         self.messages = [{"role": "system", "content": self.system_prompt}]
 
+    def set_model(self, name: str) -> None:
+        """Switch models. History stays untouched"""
+        self.model = name
+
+    async def list_models(self) -> list[str]:
+        """Names of the models ollama has downloaded"""
+        response = await self.client.list()
+        return sorted(model.model for model in response.models if model.model)
+
     async def preload(self) -> str | None:
         """Load model into memory without generating anything.
         Raises connection error if ollama isn't running"""
         try:
-            await self.client.chat(model=MODEL_NAME, messages=[], options=MODEL_OPTIONS)
+            await self.client.chat(model=self.model, messages=[], options=MODEL_OPTIONS)
         except ConnectionError:
             return "Couldn't reach ollama. systemctl status ollama"
         except ResponseError as error:
@@ -79,7 +89,7 @@ class Agent:
  
             try:
                 stream = await self.client.chat(
-                    model=MODEL_NAME,
+                    model=self.model,
                     messages=self.messages,
                     tools=self.tools,
                     stream=True,
@@ -130,7 +140,6 @@ class Agent:
 
             if not tool_calls:
                 yield TurnDone(reply, stats)
-
                 return
 
             for call in tool_calls:

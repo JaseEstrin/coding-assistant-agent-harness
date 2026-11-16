@@ -18,7 +18,7 @@ from ..events import (
     ToolCallStarted,
     TurnDone,
 )
-from .screens import PreloadScreen
+from .screens import ModelPicker, PreloadScreen
 from .widgets import StatusBar, ToolCallView
 
 
@@ -31,12 +31,13 @@ class AgentApp(App):
     BINDINGS = [  # noqa: RUF012
         ("ctrl+l", "clear", "Clear chat"),
         Binding("escape", "stop", "Stop"),
+        Binding("ctrl+o", "switch_model", "Switch Model"),
     ]
 
     def on_mount(self) -> None:
         self.agent = Agent(Path.cwd())
         self.agent_worker = None
-        self.preload_screen = PreloadScreen(MODEL_NAME)
+        self.preload_screen = PreloadScreen(self.agent.model)
         self.push_screen(self.preload_screen)
         self.preload_agent()
 
@@ -47,12 +48,51 @@ class AgentApp(App):
             self.preload_screen.show_error(error)
             return
         self.pop_screen()
+        self.query_one(StatusBar).set_model(self.agent.model)
+        self.query_one(Input).focus()
+
+    def action_switch_model(self) -> None:
+        if self.agent_worker is not None and self.agent_worker.is_running:
+            self.notify("Wait for the reply to finish (or press Esc to stop it first.)")
+            return
+        self.choose_model()
+
+    @work(exclusive=True, group="models")
+    async def choose_model(self) -> None:
+        try:
+            models = await self.agent.list_models()
+        except ConnectionError:
+            self.notify("Couldn't reach ollama to list models", severity="error")
+            return
+        if not models:
+            self.notify("No downloaded models found")
+            return
+
+        # Shows the picker and waits until the user picks something
+        choice = await self.push_screen_wait(ModelPicker(models, self.agent.model))
+        if choice is None or choice == self.agent.model:
+            return
+
+        previous = self.agent.model
+        self.agent.set_model(choice) # history is kept
+        self.preload_screen = PreloadScreen(choice)
+        await self.push_screen(self.preload_screen)
+        error = await self.agent.preload()
+        self.pop_screen()
+
+        if error:
+            self.agent.set_model(previous)
+            self.notify(f"Couldn't load {choice}: {error} Still using {previous}", severity="error", timeout=10)
+            return
+
+        self.query_one(StatusBar).set_model(choice)
+        self.notify(f"Switched to {choice}. Your conversation was kept.")
         self.query_one(Input).focus()
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield VerticalScroll(id="log")
-        yield StatusBar(MODEL_NAME)
+        yield StatusBar("")
         yield Input(placeholder="Ask the agent...")
         yield Footer()
 
