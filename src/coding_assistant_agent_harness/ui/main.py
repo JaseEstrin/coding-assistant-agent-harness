@@ -17,7 +17,7 @@ from ..events import (
     ToolCallStarted,
     TurnDone,
 )
-from .screens import ModelPicker, PreloadScreen
+from .screens import DirectoryPicker, ModelPicker, PreloadScreen
 from .widgets import StatusBar, ToolCallView
 
 
@@ -31,56 +31,99 @@ class AgentApp(App):
         ("ctrl+l", "clear", "Clear chat"),
         Binding("escape", "stop", "Stop"),
         Binding("ctrl+o", "switch_model", "Switch Model"),
+        Binding("ctrl+g", "change_directory", "Change directory")
     ]
 
     def on_mount(self) -> None:
-        self.agent = Agent(Path.cwd())
+        self.agent: Agent | None = None
         self.agent_worker = None
-        self.preload_screen = PreloadScreen(self.agent.model)
-        self.push_screen(self.preload_screen)
-        self.preload_agent()
+        self.start_up()
+
 
     @work(exclusive=True, group="preload")
-    async def preload_agent(self) -> None:
-        error = await self.agent.preload()
+    async def start_up(self) -> None:
+        # ask what directory the agent can work in
+        project_dir = await self.push_screen_wait(DirectoryPicker(Path.cwd()))
+        if project_dir is None:
+            self.exit()
+            return
+        agent = Agent(project_dir)
+        self.agent = agent
+        self.sub_title = str(project_dir)
+
+        # load the model, show loading screen
+        self.preload_screen = PreloadScreen(agent.model)
+        await self.push_screen(self.preload_screen)
+        error = await agent.preload()
         if error:
             self.preload_screen.show_error(error)
             return
         self.pop_screen()
-        self.query_one(StatusBar).set_model(self.agent.model)
+        self.query_one(StatusBar).set_model(agent.model)
+        self.query_one(Input).focus()
+
+    def action_change_directory(self) -> None:
+        if self.agent is None:
+            return
+        if self.agent_worker is not None and self.agent_worker.is_running:
+            self.notify("Wait for the reply to finish (or press Esc to stop it) first.")
+            return
+        self.change_folder()
+
+    @work(exclusive=True, group="folders")
+    async def change_folder(self) -> None:
+        agent = self.agent
+        if agent is None:
+            return
+        chosen = await self.push_screen_wait(DirectoryPicker(agent.project_dir, cancellable=True))
+        if chosen is None:
+            return
+        if chosen.resolve() == agent.project_dir.resolve():
+            self.notify("That's the current directory. Conversation kept.")
+            return
+
+        agent.set_project_dir(chosen)
+        self.query_one("#log").remove_children()
+        self.sub_title = str(chosen)
+        self.notify(f"Now working in {chosen}. Conversation cleared.")
         self.query_one(Input).focus()
 
     def action_switch_model(self) -> None:
+        if self.agent is None:
+            return
         if self.agent_worker is not None and self.agent_worker.is_running:
-            self.notify("Wait for the reply to finish (or press Esc to stop it first.)")
+            self.notify("Wait for the reply to finish (or press Esc to stop it) first.")
             return
         self.choose_model()
 
     @work(exclusive=True, group="models")
     async def choose_model(self) -> None:
+        agent = self.agent
+        if agent is None:
+            return
         try:
-            models = await self.agent.list_models()
+            models = await agent.list_models()
         except ConnectionError:
-            self.notify("Couldn't reach ollama to list models", severity="error")
+            self.notify("Couldn't reach ollama. systemctl status ollama", severity="error")
             return
         if not models:
-            self.notify("No downloaded models found")
+            self.notify("No downloaded models. ollama pull")
             return
 
-        # Shows the picker and waits until the user picks something
-        choice = await self.push_screen_wait(ModelPicker(models, self.agent.model))
-        if choice is None or choice == self.agent.model:
+        # Shows the picker then waits until user picks or cancels
+        choice = await self.push_screen_wait(ModelPicker(models, agent.model))
+        if choice is None or choice == agent.model:
             return
 
-        previous = self.agent.model
-        self.agent.set_model(choice) # history is kept
+        previous = agent.model
+        agent.set_model(choice)
         self.preload_screen = PreloadScreen(choice)
         await self.push_screen(self.preload_screen)
-        error = await self.agent.preload()
+        error = await agent.preload()
         self.pop_screen()
 
         if error:
-            self.agent.set_model(previous)
+            agent.set_model(previous) # fallback so chat keeps working
             self.notify(f"Couldn't load {choice}: {error} Still using {previous}", severity="error", timeout=10)
             return
 
@@ -112,13 +155,16 @@ class AgentApp(App):
 
     @work(exclusive=True)
     async def run_agent(self, prompt: str, reply: Markdown) -> None:
+        agent = self.agent
+        if agent is None:
+            return       
         log = self.query_one("#log", VerticalScroll)
         status_bar = self.query_one(StatusBar)
         text = ""
         last_render = 0.0
         tool_views: dict[int, ToolCallView] = {} # call_id = its widget
         try:
-            async for event in self.agent.run(prompt):
+            async for event in agent.run(prompt):
                 match event:
                     case TextDelta(text=piece):
                         status_bar.status = "generating"
@@ -174,13 +220,15 @@ class AgentApp(App):
 
     async def action_quit(self) -> None:
         """Ctrl+Q unloads the model so its ram is freed instantly"""
-        self.notify("Unloading model...")
-        await self.agent.unload()
+        if self.agent is not None:
+            self.notify("Unloading model...")
+            await self.agent.unload()
         self.exit()
 
     def action_clear(self) -> None:
         self.query_one("#log").remove_children()
-        self.agent.reset()  # forget the conversation, not just the screen
+        if self.agent is not None:
+            self.agent.reset()  # forget the conversation, not just the screen
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 AI agent harness - Jase Estrin
 
-- Agent runs locally off computer, looking at using Qwen3.5:4b through Ollama
+- Agent runs locally off computer (Ollama), looking at using Qwen3.5:4b for small tasks with the ability to switch to Qwen3.5:9b for larger tasks (no GPU, 32gb of RAM so cannot go higher, but compatible with heavier models)
 - Terminal app built in Textual
 
 What is the agent for?
 
-The agent will help with writing code
+The agent will help with writing code.
 
 When pointed to a specific directory (using any programming language), the agent will be able to:
 - Scan the program for errors, and present the user with the changes it looks to make and make them for the user by editing the file only after the action is approved

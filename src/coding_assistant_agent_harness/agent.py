@@ -55,6 +55,12 @@ class Agent:
         self._call_ids = count(1) # each tool call given a unique id for ui 
         self.reset()
 
+    def set_project_dir(self, project_dir: Path) -> None:
+        """Points the agent at a different folder. Conversation is cleared, but the model stays loaded"""
+        self.project_dir = project_dir
+        self.system_prompt = load_system_prompt(project_dir)
+        self.reset()
+
     def reset(self) -> None:
         """Starts a fresh conversation, keeps system prompt"""
         self.messages = [{"role": "system", "content": self.system_prompt}]
