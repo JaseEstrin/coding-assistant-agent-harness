@@ -1,9 +1,3 @@
-"""Find out which part of the harness's request stops tool calls from working.
-
-Sends the same question four ways: with and without the system prompt,
-streamed and not streamed. Uses the harness's own options and tool schemas.
-"""
-
 import asyncio
 from pathlib import Path
 from typing import Any
