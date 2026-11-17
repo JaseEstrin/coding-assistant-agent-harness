@@ -26,7 +26,7 @@ Functionality
 
 
 Tools
--Read-Only
+- Read-Only
     - read_file: allows the agent to read the contents of any file in its working directory. If file is too large to process, the agent can read chunks of the file according to start_line and end_line variables. The agent can detect whether the file contains text and is readable, or if it is a directory or a binary file and not legible
     - list_directory: allows the agent to look through the file tree of its working directory. Can list files (and their sizes) and read their contents with read_file. Filters out useless files like ".venv", ".git", etc.. Cannot look at files outside of the project directory, or follow links outside of the project directory.
     - search_files: allows the agent to search for instances of a specified phrase throughout the project. Ignores directories and useless files. Returns file name, location of the phrase's usage in the file, and context. Truncates when a given phrase is found many times.
