@@ -7,6 +7,7 @@ from ollama import AsyncClient, ResponseError
 
 from .config import (
     CONTEXT_LENGTH,
+    KEEP_ALIVE,
     MAX_STEPS_PER_TURN,
     MODEL_NAME,
     SERVER_ADDRESS,
@@ -71,12 +72,19 @@ class Agent:
         """Load model into memory without generating anything.
         Raises connection error if ollama isn't running"""
         try:
-            await self.client.chat(model=self.model, messages=[], options=MODEL_OPTIONS)
+            await self.client.chat(model=self.model, messages=[], options=MODEL_OPTIONS, keep_alive=KEEP_ALIVE)
         except ConnectionError:
             return "Couldn't reach ollama. systemctl status ollama"
         except ResponseError as error:
             return f"ollama returned an error: {error.error}"
         return None
+
+    async def unload(self) -> None:
+        """Free the model's memory"""
+        try:
+            await self.client.chat(model=self.model, messages=[], keep_alive=0)
+        except (ConnectionError, ResponseError):
+            pass
 
     async def run(self, user_text: str) -> AsyncIterator[Event]:
         """Handle one user message, yielding events as the reply streams in. Run any tools it asks for"""
@@ -95,6 +103,7 @@ class Agent:
                     stream=True,
                     think=THINKING,
                     options=MODEL_OPTIONS,
+                    keep_alive=KEEP_ALIVE,
                 )
                 async for chunk in stream:
                     if chunk.message.thinking:

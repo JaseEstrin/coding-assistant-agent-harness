@@ -9,7 +9,6 @@ from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from ..agent import Agent
-from ..config import MODEL_NAME
 from ..events import (
     AgentError,
     TextDelta,
@@ -172,6 +171,12 @@ class AgentApp(App):
     def action_stop(self) -> None:
         if self.agent_worker is not None and self.agent_worker.is_running:
             self.agent_worker.cancel()
+
+    async def action_quit(self) -> None:
+        """Ctrl+Q unloads the model so its ram is freed instantly"""
+        self.notify("Unloading model...")
+        await self.agent.unload()
+        self.exit()
 
     def action_clear(self) -> None:
         self.query_one("#log").remove_children()

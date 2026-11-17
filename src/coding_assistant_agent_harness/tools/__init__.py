@@ -2,9 +2,10 @@ import asyncio
 from pathlib import Path
 
 from .base import Tool, ToolError
+from .directories import LIST_DIRECTORY
 from .files import READ_FILE
 
-TOOLS: dict[str, Tool] = {tool.name: tool for tool in [READ_FILE]}
+TOOLS: dict[str, Tool] = {tool.name: tool for tool in [READ_FILE, LIST_DIRECTORY]}
 
 
 def tool_schemas() -> list[dict]:
