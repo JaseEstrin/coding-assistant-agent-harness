@@ -3,9 +3,9 @@ from pathlib import Path
 from rich.markup import escape
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Label, LoadingIndicator, OptionList
+from textual.widgets import Button, Label, LoadingIndicator, OptionList, Static
 from textual.widgets.option_list import Option
 
 
@@ -175,3 +175,59 @@ class DirectoryPicker(Screen[Path]):
             self.notify("The directory is too broad. Choose a project folder", severity="warning")
             return
         self.dismiss(chosen)
+
+
+class ApproveTool(ModalScreen[bool]):
+    """Asks the user to allow or deny one tool call"""
+    DEFAULT_CSS = """
+    #approve-box {
+        width: 80%; max-width: 100; height: auto;
+        border: thick $error; background: $surface; padding: 1 2;
+    }
+    #approve-title { text-style: bold; margin-bottom: 1; }
+    #approve-detail {
+        background: $boost; padding: 1 2; margin-bottom: 1;
+        max-height: 15; overflow-y: auto;
+    }
+    #approve-note { color: $text-muted; margin-bottom: 1; }
+    #approve-buttons { height: auto; align-horizontal: center; }
+    #approve-buttons Button { margin: 0 2; }
+    """
+
+    BINDINGS = [  # noqa: RUF012
+        Binding("y", "allow", "Allow"),
+        Binding("n", "deny", "Deny"),
+        Binding("escape", "deny", "Deny", priority=True),
+    ]
+
+    def __init__(self, name: str, arguments: dict) -> None:
+        super().__init__()
+        self.tool_name = name
+        self.arguments = arguments
+
+    def compose(self) -> ComposeResult:
+        if self.tool_name == "run_command":
+            title = "The agent wants to run this command:"
+            detail = str(self.arguments.get("command", ""))
+        else:
+            title = f"The agent wants to use {self.tool_name}:"
+            detail = "\n".join(f"{key}: {value}" for key, value in self.arguments.items())
+        with Vertical(id="approve-box"):
+            yield Label(title, id="approve-title")
+            yield Static(detail, id="approve-detail", markup=False)
+            yield Label("It runs in your project folder with your permissions.", id="approve-note")
+            with Horizontal(id="approve-buttons"):
+                yield Button("Allow (Y)", variant="success", id="allow")
+                yield Button("Deny (N)", variant="error", id="deny")
+
+    def on_mount(self) -> None:
+        self.query_one("#deny", Button).focus()
+
+    def on_button_press(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "allow")
+
+    def action_allow(self) -> None:
+        self.dismiss(True)
+
+    def action_deny(self) -> None:
+        self.dismiss(False)

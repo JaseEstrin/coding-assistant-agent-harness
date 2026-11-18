@@ -13,6 +13,7 @@ class Tool:
     description: str
     parameters: dict # json schema
     function: Callable[..., str]
+    needs_approval: bool = False
 
     @property
     def schema(self) -> dict:

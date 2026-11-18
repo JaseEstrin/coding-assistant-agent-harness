@@ -11,13 +11,15 @@ class StatusBar(Static):
     StatusBar.-thinking { color: $warning; }
     StatusBar.-generating { color: $success; }
     StatusBar.-tool { color: $accent; }
+    StatusBar.-approval { color: $error; text-style: bold; }
     """
 
     LABELS = {  # noqa: RUF012
         "idle": "● idle",
         "thinking": "◌ thinking...",
         "generating": "▶ generating...",
-        "tool": "⚙ running tool..."
+        "tool": "⚙ running tool...",
+        "approval": "? waiting for your approval",
     }
 
     status: reactive[str] = reactive("idle")

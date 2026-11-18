@@ -2,12 +2,19 @@ import asyncio
 from pathlib import Path
 
 from .base import Tool, ToolError
+from .commands import RUN_COMMAND
 from .directories import LIST_DIRECTORY
 from .files import READ_FILE
 from .search import SEARCH_FILES
 
-TOOLS: dict[str, Tool] = {tool.name: tool for tool in [READ_FILE, LIST_DIRECTORY, SEARCH_FILES]}
+TOOLS: dict[str, Tool] = {tool.name: tool for tool in [READ_FILE, LIST_DIRECTORY, SEARCH_FILES, RUN_COMMAND]}
 
+
+def needs_approval(name: str) -> bool:
+    """Whether the user needs to approve a call to the tool before it is run"""
+    tool = TOOLS.get(name)
+    return tool is not None and tool.needs_approval
+    
 
 def tool_schemas() -> list[dict]:
     """All tool definitions, to send with every request"""

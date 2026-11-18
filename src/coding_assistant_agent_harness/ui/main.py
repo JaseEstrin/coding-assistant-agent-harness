@@ -17,7 +17,7 @@ from ..events import (
     ToolCallStarted,
     TurnDone,
 )
-from .screens import DirectoryPicker, ModelPicker, PreloadScreen
+from .screens import ApproveTool, DirectoryPicker, ModelPicker, PreloadScreen
 from .widgets import StatusBar, ToolCallView
 
 
@@ -47,7 +47,7 @@ class AgentApp(App):
         if project_dir is None:
             self.exit()
             return
-        agent = Agent(project_dir)
+        agent = Agent(project_dir, approve=self.approve_tool)
         self.agent = agent
         self.sub_title = str(project_dir)
 
@@ -61,6 +61,14 @@ class AgentApp(App):
         self.pop_screen()
         self.query_one(StatusBar).set_model(agent.model)
         self.query_one(Input).focus()
+
+    async def approve_tool(self, name: str, arguments: dict) -> bool:
+        """Called by agent mid turn before any tool that needs approval"""
+        status_bar = self.query_one(StatusBar)
+        status_bar.status = "approval"
+        approved = await self.push_screen_wait(ApproveTool(name, arguments))
+        status_bar.status = "tool" if approved else "thinking"
+        return bool(approved)
 
     def action_change_directory(self) -> None:
         if self.agent is None:

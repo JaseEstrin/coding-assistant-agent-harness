@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from itertools import count
 from pathlib import Path
 
@@ -23,13 +23,20 @@ from .events import (
     TurnDone,
     TurnStats,
 )
-from .tools import run_tool, tool_schemas
+from .tools import needs_approval, run_tool, tool_schemas
 
 PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
 
 MODEL_OPTIONS = {"num_ctx": CONTEXT_LENGTH}
 
 NANOSECONDS = 1_000_000_000
+
+ApproveCallback = Callable[[str, dict], Awaitable[bool]]
+
+DECLINED_MESSAGE = (
+    "The user declined to run this. Do not try it again. "
+    "Ask the user what they would like to do instead."
+)
 
 
 def load_system_prompt(project_dir: Path) -> str:
@@ -45,8 +52,9 @@ def write_debug_log(reply: str, tool_calls: list) -> None:
 class Agent:
     """Holds the conversation and talks to the model. Doesn't know anything about the ui"""
 
-    def __init__(self, project_dir: Path, client: AsyncClient | None = None) -> None:
+    def __init__(self, project_dir: Path, approve: ApproveCallback | None = None, client: AsyncClient | None = None) -> None:
         self.project_dir = project_dir
+        self.approve = approve
         self.client = client or AsyncClient(host=SERVER_ADDRESS) # optional
         self.system_prompt = load_system_prompt(project_dir)
         self.tools = tool_schemas()
@@ -92,10 +100,16 @@ class Agent:
         except (ConnectionError, ResponseError):
             pass
 
+    async def _ask_approval(self, name: str, arguments: dict) -> bool:
+        if self.approve is None:
+            return False
+        return await self.approve(name, arguments)
+
     async def run(self, user_text: str) -> AsyncIterator[Event]:
         """Handle one user message, yielding events as the reply streams in. Run any tools it asks for"""
         turn_start = len(self.messages) # allows failed turn to roll back
         self.messages.append({"role": "user", "content": user_text})
+
         for _step in range(MAX_STEPS_PER_TURN):
             reply = ""
             tool_calls = []
@@ -162,7 +176,10 @@ class Agent:
                 name = call.function.name
                 arguments = dict(call.function.arguments or {})
                 yield ToolCallStarted(call_id, name, arguments)
-                result = await run_tool(name, arguments, self.project_dir)
+                if needs_approval(name) and not await self._ask_approval(name, arguments):
+                    result = DECLINED_MESSAGE
+                else:
+                    result = await run_tool(name, arguments, self.project_dir)
                 self.messages.append({"role": "tool", "tool_name": name, "content": result})
                 yield ToolCallFinished(call_id, name, result)
 
